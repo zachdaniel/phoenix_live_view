@@ -615,10 +615,36 @@ defmodule Phoenix.LiveComponent do
             ) ::
               {:noreply, Socket.t()}
 
+  @doc """
+  Invoked to handle commands sent by other processes.
+
+  Commands are sent using `send_command/3` and provide a mechanism for
+  external processes to communicate with a LiveComponent in a structured way.
+
+  It receives the `command` name, the command payload, and the socket.
+
+  It must return `{:noreply, socket}`, where `:noreply` means
+  no additional information is sent to the process which sent the command.
+
+  ## Examples
+
+      def handle_command(:refresh_data, params, socket) do
+        {:noreply, assign(socket, :data, load_fresh_data(params))}
+      end
+
+      def handle_command(:update_status, %{online: online}, socket) do
+        {:noreply, assign(socket, :online, online)}
+      end
+
+  """
+  @callback handle_command(command :: atom, params :: map, socket :: Socket.t()) ::
+              {:noreply, Socket.t()}
+
   @optional_callbacks mount: 1,
                       update_many: 1,
                       update: 2,
                       render: 1,
                       handle_event: 3,
-                      handle_async: 3
+                      handle_async: 3,
+                      handle_command: 3
 end

@@ -172,6 +172,64 @@ defmodule Phoenix.LiveView do
   async operation, but you can also assign any value directly to the socket
   if you want to handle the state yourself.
 
+  ## Commands
+
+  Commands provide a structured way to send messages to LiveViews and LiveComponents
+  from other processes. Unlike raw `send/2` messages that go to `c:handle_info/2`,
+  commands are handled by the `c:handle_command/3` callback and provide a clear
+  API for inter-process communication.
+
+  ### Basic Usage
+
+  Send a command to a LiveView:
+
+      # Send to current LiveView process
+      send_command(nil, :refresh_data, %{user_id: 123})
+
+      # Send to specific LiveView process
+      send_command(live_view_pid, :notify_user, %{message: "Hello!"})
+
+  Send a command to a LiveComponent:
+
+      # Using module and ID
+      send_command({MyComponent, "user-123"}, :update_status, %{online: true})
+
+      # Using @myself from within a component
+      send_command(@myself, :refresh_data, %{})
+
+  ### Defining Command Handlers
+
+  In your LiveView:
+
+      defmodule MyAppWeb.DashboardLive do
+        use MyAppWeb, :live_view
+
+        def handle_command(:refresh_data, params, socket) do
+          data = MyApp.fetch_data(params.user_id)
+          {:noreply, assign(socket, :data, data)}
+        end
+
+        def handle_command(:notify_user, %{message: message}, socket) do
+          {:noreply, put_flash(socket, :info, message)}
+        end
+      end
+
+  In your LiveComponent:
+
+      defmodule MyAppWeb.UserComponent do
+        use MyAppWeb, :live_component
+
+        def handle_command(:update_status, %{online: online}, socket) do
+          {:noreply, assign(socket, :online, online)}
+        end
+      end
+
+  Commands are particularly useful for:
+  - Coordinating between different LiveViews
+  - Updating LiveComponents from background processes
+  - Implementing pub/sub patterns with structured messages
+  - Building APIs for external systems to interact with LiveViews
+
   ## Endpoint configuration
 
   LiveView accepts the following configuration in your endpoint under
@@ -328,6 +386,33 @@ defmodule Phoenix.LiveView do
             ) ::
               {:noreply, Socket.t()}
 
+  @doc """
+  Invoked to handle commands sent by other processes.
+
+  Commands are sent using `send_command/3` and provide a mechanism for
+  external processes to communicate with a LiveView in a structured way.
+  Unlike messages sent to `c:handle_info/2`, commands are intended to be
+  part of the public API of a LiveView.
+
+  It receives the `command` name, the command payload, and the socket.
+
+  It must return `{:noreply, socket}`, where `:noreply` means
+  no additional information is sent to the process which sent the command.
+
+  ## Examples
+
+      def handle_command(:refresh_data, params, socket) do
+        {:noreply, assign(socket, :data, load_fresh_data(params))}
+      end
+
+      def handle_command(:notify_user, %{message: message}, socket) do
+        {:noreply, put_flash(socket, :info, message)}
+      end
+
+  """
+  @callback handle_command(command :: atom, params :: map, socket :: Socket.t()) ::
+              {:noreply, Socket.t()}
+
   @optional_callbacks mount: 3,
                       render: 1,
                       terminate: 2,
@@ -336,7 +421,8 @@ defmodule Phoenix.LiveView do
                       handle_call: 3,
                       handle_info: 2,
                       handle_cast: 2,
-                      handle_async: 3
+                      handle_async: 3,
+                      handle_command: 3
 
   @doc """
   Uses LiveView in the current module to mark it a LiveView.
@@ -1468,6 +1554,59 @@ defmodule Phoenix.LiveView do
 
     Phoenix.LiveView.Channel.send_update_after(pid, {module, id}, assigns, time_in_milliseconds)
   end
+
+  @doc """
+  Sends a command to a LiveView or LiveComponent process.
+
+  Commands provide a structured way to communicate with LiveView and LiveComponent
+  processes from external processes. Unlike raw messages sent via `send/2`,
+  commands have a defined structure and are handled by the `c:handle_command/3`
+  callback.
+
+  The first argument can be:
+
+    * `nil` - sends the command to the current LiveView process (same as `self()`)
+    * A LiveView `pid` - sends the command to the specified LiveView process
+    * `{module, id}` - sends the command to a LiveComponent with the given module and ID
+
+  ## Examples
+
+  Send a command to the current LiveView:
+
+      send_command(nil, :refresh_data, %{user_id: 123})
+
+  Send a command to a specific LiveView process:
+
+      send_command(lv_pid, :notify_user, %{message: "Hello!"})
+
+  Send a command to a LiveComponent:
+
+      send_command({MyComponent, "user-123"}, :update_status, %{online: true})
+
+  """
+  def send_command(destination, command, params \\ %{})
+
+  def send_command(nil, command, params) when is_atom(command) do
+    send_command(self(), command, params)
+  end
+
+  def send_command(pid, command, params) when is_pid(pid) and is_atom(command) do
+    params = ensure_map(params)
+    Phoenix.LiveView.Channel.send_command(pid, command, params)
+  end
+
+  def send_command({module, id}, command, params) when is_atom(module) and is_atom(command) do
+    params = ensure_map(params)
+    Phoenix.LiveView.Channel.send_command_to_component({module, id}, command, params)
+  end
+
+  def send_command(%Phoenix.LiveComponent.CID{} = cid, command, params) when is_atom(command) do
+    params = ensure_map(params)
+    Phoenix.LiveView.Channel.send_command_to_component(cid, command, params)
+  end
+
+  defp ensure_map(params) when is_map(params), do: params
+  defp ensure_map(params), do: Enum.into(params, %{})
 
   @doc """
   Returns the transport pid of the socket.

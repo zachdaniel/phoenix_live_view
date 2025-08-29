@@ -271,6 +271,42 @@ defmodule Phoenix.LiveView.Diff do
 
       {diff, new_components} = Diff.update_component(socket, state.components, update)
   """
+  def resolve_component_cid(ref, components) do
+    fetch_cid(ref, components)
+  end
+
+  def command_component(socket, components, {ref, command, params}) do
+    case fetch_cid(ref, components) do
+      {:ok, {cid, module}} ->
+        exported? = function_exported?(module, :handle_command, 3) or 
+                    (Code.ensure_loaded?(module) and function_exported?(module, :handle_command, 3))
+        
+        if exported? do
+          {diff, new_components, extra} =
+            write_component(socket, cid, components, fn component_socket, _component ->
+              case apply(module, :handle_command, [command, params, component_socket]) do
+                {:noreply, new_socket} -> {new_socket, {nil, %{}}}
+                other -> other
+              end
+            end)
+
+          case extra do
+            {nil, _flash} -> {diff, new_components}
+            _ -> {diff, new_components}
+          end
+        else
+          require Logger
+          Logger.debug(
+            "warning: undefined handle_command in #{inspect(module)}. Unhandled command: #{inspect(command)}"
+          )
+          :noop
+        end
+
+      :error ->
+        :noop
+    end
+  end
+
   def update_component(socket, components, {ref, updated_assigns}) do
     case fetch_cid(ref, components) do
       {:ok, {cid, module}} ->

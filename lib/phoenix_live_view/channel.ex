@@ -41,6 +41,14 @@ defmodule Phoenix.LiveView.Channel do
     )
   end
 
+  def send_command(pid, command, params) do
+    send(pid, {@prefix, :send_command, {command, params}})
+  end
+
+  def send_command_to_component(component_ref, command, params) do
+    send(self(), {@prefix, :send_command_to_component, {component_ref, command, params}})
+  end
+
   def report_async_result(monitor_ref, kind, ref, cid, keys, result)
       when is_reference(monitor_ref) and kind in [:assign, :start, :stream] and is_reference(ref) do
     send(monitor_ref, {@prefix, :async_result, {kind, {ref, cid, keys, result}}})
@@ -329,6 +337,24 @@ defmodule Phoenix.LiveView.Channel do
     end
   end
 
+  def handle_info({@prefix, :send_command, {command, params}}, state) do
+    {command, params}
+    |> view_handle_command(state.socket)
+    |> handle_result({:handle_command, 3, nil}, state)
+  end
+
+  def handle_info({@prefix, :send_command_to_component, {component_ref, command, params}}, state) do
+    case Diff.command_component(state.socket, state.components, {component_ref, command, params}) do
+      {diff, new_components} ->
+        {:noreply, push_diff(%{state | components: new_components}, diff, nil)}
+      :noop ->
+        Logger.debug(
+          "send_command failed because component #{inspect(component_ref)} does not exist or it has been removed"
+        )
+        {:noreply, state}
+    end
+  end
+
   def handle_info({@prefix, :redirect, command, flash}, state) do
     handle_redirect(state, command, flash, nil)
   end
@@ -558,6 +584,21 @@ defmodule Phoenix.LiveView.Channel do
         {:noreply, socket}
     end
   end
+
+  defp view_handle_command({command, params}, %{view: view} = socket) do
+    exported? = exported?(view, :handle_command, 3)
+
+    if exported? do
+      view.handle_command(command, params, socket)
+    else
+      Logger.debug(
+        "warning: undefined handle_command in #{inspect(view)}. Unhandled command: #{inspect(command)}"
+      )
+
+      {:noreply, socket}
+    end
+  end
+
 
   defp exported?(m, f, a) do
     function_exported?(m, f, a) or (Code.ensure_loaded?(m) and function_exported?(m, f, a))
